@@ -1,5 +1,5 @@
-// lib/db.ts
 import { sql } from '@vercel/postgres';
+import bcrypt from 'bcryptjs';
 
 // データベース接続テスト
 export async function testConnection() {
@@ -105,3 +105,161 @@ export async function getAllFarmersWithBases() {
       throw error;
     }
   }
+export async function getFarmersWithPagination(area: string, page: number, pageSize: number) {
+    try {
+      const offset = (page - 1) * pageSize;
+      
+      // エリアが「すべて」の場合
+      if (area === 'すべて') {
+        const { rows } = await sql`
+          SELECT 
+            f.*,
+            b.name as base_name,
+            b.area as base_area,
+            b.station as base_station
+          FROM farmers f
+          JOIN farmer_bases fb ON f.id = fb.farmer_id
+          JOIN bases b ON fb.base_id = b.id
+          ORDER BY f.id
+          LIMIT ${pageSize} OFFSET ${offset}
+        `;
+        
+        // 総数取得用のクエリ
+        const { rows: countRows } = await sql`
+          SELECT COUNT(*) FROM farmers f
+          JOIN farmer_bases fb ON f.id = fb.farmer_id
+          JOIN bases b ON fb.base_id = b.id
+        `;
+        
+        return {
+          farmers: rows,
+          total: parseInt(countRows[0].count, 10)
+        };
+      }
+      
+      // 特定のエリアでフィルタリング
+      const { rows } = await sql`
+        SELECT 
+          f.*,
+          b.name as base_name,
+          b.area as base_area,
+          b.station as base_station
+        FROM farmers f
+        JOIN farmer_bases fb ON f.id = fb.farmer_id
+        JOIN bases b ON fb.base_id = b.id
+        WHERE b.area = ${area}
+        ORDER BY f.id
+        LIMIT ${pageSize} OFFSET ${offset}
+      `;
+      
+      // フィルター適用後の総数取得
+      const { rows: countRows } = await sql`
+        SELECT COUNT(*) FROM farmers f
+        JOIN farmer_bases fb ON f.id = fb.farmer_id
+        JOIN bases b ON fb.base_id = b.id
+        WHERE b.area = ${area}
+      `;
+      
+      return {
+        farmers: rows,
+        total: parseInt(countRows[0].count, 10)
+      };
+    } catch (error) {
+      console.error('Error fetching farmers with pagination:', error);
+      throw error;
+    }
+  }
+  
+  // すべてのエリアを取得する関数
+  export async function getAllAreas() {
+    try {
+      const { rows } = await sql`
+        SELECT DISTINCT area FROM bases
+      `;
+      return ['すべて', ...rows.map(row => row.area)];
+    } catch (error) {
+      console.error('Error fetching areas:', error);
+      throw error;
+    }
+  }
+
+// ユーザーテーブルの作成
+export async function createUsersTable() {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    console.log('Users table created successfully');
+    return true;
+  } catch (error) {
+    console.error('Failed to create users table:', error);
+    throw error;
+  }
+}
+
+// ユーザー登録
+export async function registerUser(name: string, email: string, password: string) {
+  try {
+    // メールアドレスの重複チェック
+    const { rows: existingUsers } = await sql`
+      SELECT * FROM users WHERE email = ${email}
+    `;
+    
+    if (existingUsers.length > 0) {
+      throw new Error('このメールアドレスは既に登録されています');
+    }
+    
+    // パスワードのハッシュ化
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // ユーザーの登録
+    const { rows } = await sql`
+      INSERT INTO users (name, email, password)
+      VALUES (${name}, ${email}, ${hashedPassword})
+      RETURNING id, name, email, created_at
+    `;
+    
+    return rows[0];
+  } catch (error) {
+    console.error('Failed to register user:', error);
+    throw error;
+  }
+}
+
+// ユーザー認証（ログイン）
+export async function loginUser(email: string, password: string) {
+  try {
+    // メールアドレスでユーザーを検索
+    const { rows } = await sql`
+      SELECT * FROM users WHERE email = ${email}
+    `;
+    
+    if (rows.length === 0) {
+      throw new Error('メールアドレスまたはパスワードが正しくありません');
+    }
+    
+    const user = rows[0];
+    
+    // パスワードの検証
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      throw new Error('メールアドレスまたはパスワードが正しくありません');
+    }
+    
+    // パスワードを除外したユーザー情報を返す
+    const { password: _, ...userWithoutPassword } = user;
+    return userWithoutPassword;
+  } catch (error) {
+    console.error('Failed to login:', error);
+    throw error;
+  }
+}
