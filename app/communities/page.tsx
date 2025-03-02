@@ -47,14 +47,17 @@ async function FarmersList({ area, page }: { area: string, page: number }) {
 }
 
 export default async function CommunityPage({
+  params,
   searchParams,
 }: {
+  params: {};
   searchParams: { area?: string | string[], page?: string };
 }) {
-  const params = await searchParams;
-  const areaParam = typeof params.area === 'string' ? params.area : 
-                     Array.isArray(params.area) ? params.area[0] : undefined;
-  const pageParam = typeof params.page === 'string' ? parseInt(params.page, 10) : 1;
+  const searchParamsData = await searchParams;
+  
+  const areaParam = typeof searchParamsData.area === 'string' ? searchParamsData.area : 
+                    Array.isArray(searchParamsData.area) ? searchParamsData.area[0] : undefined;
+  const pageParam = typeof searchParamsData.page === 'string' ? parseInt(searchParamsData.page, 10) : 1;
   
   const selectedArea = areaParam || 'すべて';
   const currentPage = isNaN(pageParam) ? 1 : pageParam;
