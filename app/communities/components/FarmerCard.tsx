@@ -1,13 +1,27 @@
-// app/communities/components/FarmerCard.tsx
-export default function FarmerCard({ farmer }: { farmer: any }) {
-    return (
-      <div className="border rounded-lg overflow-hidden shadow">
+import Link from 'next/link';
+import Image from 'next/image';
+
+interface Farmer {
+  id: string;
+  name: string;
+  promotion_image_url: string;
+  base_area: string;
+  base_station: string;
+  base_name: string;
+  location: string;
+}
+
+export default function FarmerCard({ farmer }: { farmer: Farmer }) {
+  return (
+    <Link href={`/communities/${farmer.id}`} className="block">
+      <div className="border rounded-lg overflow-hidden shadow transition-transform hover:translate-y-[-5px]">
         {/* 農家の画像 */}
         <div className="h-64 relative">
-          <img
-            src={farmer.promotion_image_url}
+          <Image
+            src={farmer.promotion_image_url || "/images/placeholder.jpg"}
             alt={farmer.name}
-            className="w-full h-full object-cover"
+            fill
+            className="object-cover"
           />
         </div>
         
@@ -25,5 +39,6 @@ export default function FarmerCard({ farmer }: { farmer: any }) {
           </div>
         </div>
       </div>
-    );
-  }
+    </Link>
+  );
+}

@@ -263,3 +263,51 @@ export async function loginUser(email: string, password: string) {
     throw error;
   }
 }
+
+// 特定のIDの農家情報とそれに関連する情報を取得する関数
+export async function getFarmerById(id: string) {
+  try {
+    // 農家の基本情報を取得
+    const { rows: farmerRows } = await sql`
+      SELECT 
+        f.*,
+        b.name as base_name,
+        b.area as base_area,
+        b.station as base_station,
+        b.address as base_address,
+        b.description as base_description,
+        b.base_image_url,
+        b.google_map_url as base_google_map_url,
+        fb.delivery_frequency,
+        fb.delivery_time,
+        fb.interaction_frequency,
+        fb.interaction_details
+      FROM farmers f
+      JOIN farmer_bases fb ON f.id = fb.farmer_id
+      JOIN bases b ON fb.base_id = b.id
+      WHERE f.id = ${id}
+    `;
+    
+    if (farmerRows.length === 0) {
+      return null;
+    }
+    
+    // 季節ごとの作物情報を取得
+    const { rows: seasonalProducts } = await sql`
+      SELECT * FROM seasonal_products
+      WHERE farmer_id = ${id}
+      ORDER BY season
+    `;
+    
+    // 農家情報と季節作物情報を結合
+    const farmer = farmerRows[0];
+    
+    return {
+      ...farmer,
+      seasonal_products: seasonalProducts
+    };
+  } catch (error) {
+    console.error('Error fetching farmer by id:', error);
+    throw error;
+  }
+}
