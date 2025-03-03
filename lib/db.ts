@@ -311,3 +311,297 @@ export async function getFarmerById(id: string) {
     throw error;
   }
 }
+// まず、farmers テーブルとユーザーを紐づけるための中間テーブルを作成
+// lib/db.ts に以下の関数を追加
+
+/**
+ * ユーザーと農家の紐づけテーブルを作成
+ */
+export async function createUsersFarmersTable() {
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS users_farmers (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        farmer_id INTEGER REFERENCES farmers(id),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, farmer_id)  -- 同じユーザーと農家の組み合わせを防ぐ
+      );
+    `;
+    console.log('Users-Farmers table created successfully');
+    return true;
+  } catch (error) {
+    console.error('Failed to create users-farmers table:', error);
+    throw error;
+  }
+}
+
+/**
+ * 農家情報を作成する関数 (カスタム拠点対応版)
+ */
+export async function createFarmer(farmerData: any, userId: string) {
+  // トランザクション開始
+  await sql`BEGIN`;
+  
+  try {
+    // 1. カスタム拠点の作成（必要な場合）
+    let baseId = farmerData.base_id;
+    
+    if (farmerData.custom_base) {
+      try {
+        // 拠点テーブルのシーケンスをリセット
+        await sql`SELECT setval('bases_id_seq', (SELECT COALESCE(MAX(id) + 1, 1) FROM bases), false)`;
+        
+        // カスタム拠点を作成
+        const { rows: baseRows } = await sql`
+          INSERT INTO bases (
+            name, area, station, address, description, base_image_url, google_map_url
+          )
+          VALUES (
+            ${farmerData.custom_base.name}, 
+            ${farmerData.custom_base.area}, 
+            ${farmerData.custom_base.station}, 
+            ${farmerData.custom_base.address || null}, 
+            ${farmerData.custom_base.description || null},
+            ${farmerData.custom_base.base_image_url || null},
+            ${farmerData.custom_base.google_map_url || null}
+          )
+          RETURNING id
+        `;
+        
+        baseId = baseRows[0].id;
+      } catch (error) {
+        console.error('Failed to create custom base:', error);
+        
+        // 既存の拠点を使用
+        if (!baseId) {
+          const { rows: existingBases } = await sql`
+            SELECT id FROM bases LIMIT 1
+          `;
+          
+          if (existingBases.length === 0) {
+            throw new Error('拠点が見つかりません。少なくとも1つの拠点が必要です。');
+          }
+          
+          baseId = existingBases[0].id;
+        }
+      }
+    }
+    
+    if (!baseId) {
+      throw new Error('拠点IDが指定されていません');
+    }
+    
+    // 農家テーブルのシーケンスもリセット
+    await sql`SELECT setval('farmers_id_seq', (SELECT COALESCE(MAX(id) + 1, 1) FROM farmers), false)`;
+    
+    // 2. 農家情報を挿入
+    const { rows: farmerRows } = await sql`
+      INSERT INTO farmers (
+        name, location, representative_name, short_description, 
+        full_description, representative_image_url, promotion_image_url, google_map_url
+      )
+      VALUES (
+        ${farmerData.name}, ${farmerData.location}, ${farmerData.representative_name || null}, 
+        ${farmerData.short_description || null}, ${farmerData.full_description || null}, 
+        ${farmerData.representative_image_url || null}, ${farmerData.promotion_image_url || null}, 
+        ${farmerData.google_map_url || null}
+      )
+      RETURNING id
+    `;
+    
+    // farmersテーブルからIDを正しく取得
+    const farmerId = farmerRows[0].id;
+    console.log('Created farmer with ID:', farmerId);
+    
+    // 3. 拠点関連を挿入
+    await sql`
+      INSERT INTO farmer_bases (
+        farmer_id, base_id, delivery_frequency, delivery_time,
+        interaction_frequency, interaction_details
+      )
+      VALUES (
+        ${farmerId}, ${baseId}, ${farmerData.delivery_frequency || null},
+        ${farmerData.delivery_time || null}, ${farmerData.interaction_frequency || null},
+        ${farmerData.interaction_details || null}
+      )
+    `;
+    
+    // 4. 季節ごとの作物情報を追加
+    if (farmerData.seasonal_products && farmerData.seasonal_products.length > 0) {
+      for (const product of farmerData.seasonal_products) {
+        // 空のproductsをスキップ
+        if (!product.products || product.products.trim() === '') continue;
+        
+        await sql`
+          INSERT INTO seasonal_products (farmer_id, season, products)
+          VALUES (${farmerId}, ${product.season}, ${product.products})
+        `;
+      }
+    }
+    
+    // 5. 作成者との関連付けを追加
+    await sql`
+      INSERT INTO users_farmers (user_id, farmer_id)
+      VALUES (${userId}, ${farmerId})
+    `;
+    
+    // トランザクションのコミット
+    await sql`COMMIT`;
+    
+    return farmerId;
+  } catch (error) {
+    // エラーが発生した場合はロールバック
+    await sql`ROLLBACK`;
+    console.error('Error creating farmer:', error);
+    throw error;
+  }
+}
+/**
+ * 農家情報を更新する関数 (カスタム拠点対応版)
+ */
+export async function updateFarmer(id: string, farmerData: any, userId: string) {
+  try {
+    // トランザクション開始
+    await sql`BEGIN`;
+    
+    try {
+      // 権限チェック
+      const { rows: userFarmers } = await sql`
+        SELECT * FROM users_farmers 
+        WHERE user_id = ${userId} AND farmer_id = ${id}
+      `;
+      
+      if (userFarmers.length === 0) {
+        throw new Error('編集権限がありません');
+      }
+      
+      // カスタム拠点の作成（必要な場合）
+      let baseId = farmerData.base_id;
+      
+      if (farmerData.custom_base) {
+        // カスタム拠点を作成
+        const { rows: baseRows } = await sql`
+          INSERT INTO bases (
+            name, area, station, address, description, base_image_url, google_map_url
+          )
+          VALUES (
+            ${farmerData.custom_base.name}, 
+            ${farmerData.custom_base.area}, 
+            ${farmerData.custom_base.station}, 
+            ${farmerData.custom_base.address}, 
+            ${farmerData.custom_base.description},
+            ${farmerData.custom_base.base_image_url || null},
+            ${farmerData.custom_base.google_map_url || null}
+          )
+          RETURNING id
+        `;
+        
+        baseId = baseRows[0].id;
+      }
+      
+      if (!baseId) {
+        throw new Error('拠点IDが指定されていません');
+      }
+      
+      // 1. 農家情報を更新
+      await sql`
+        UPDATE farmers SET
+          name = ${farmerData.name},
+          location = ${farmerData.location},
+          representative_name = ${farmerData.representative_name},
+          short_description = ${farmerData.short_description},
+          full_description = ${farmerData.full_description},
+          representative_image_url = ${farmerData.representative_image_url},
+          promotion_image_url = ${farmerData.promotion_image_url},
+          google_map_url = ${farmerData.google_map_url},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ${id}
+      `;
+      
+      // 2. 拠点関連を更新
+      await sql`
+        UPDATE farmer_bases SET
+          base_id = ${baseId},
+          delivery_frequency = ${farmerData.delivery_frequency},
+          delivery_time = ${farmerData.delivery_time},
+          interaction_frequency = ${farmerData.interaction_frequency},
+          interaction_details = ${farmerData.interaction_details},
+          updated_at = CURRENT_TIMESTAMP
+        WHERE farmer_id = ${id}
+      `;
+      
+      // 3. 既存の季節ごとの作物情報を削除
+      await sql`DELETE FROM seasonal_products WHERE farmer_id = ${id}`;
+      
+      // 4. 新しい季節ごとの作物情報を追加
+      if (farmerData.seasonal_products && farmerData.seasonal_products.length > 0) {
+        for (const product of farmerData.seasonal_products) {
+          // 空のproductsをスキップ
+          if (!product.products || product.products.trim() === '') continue;
+          
+          await sql`
+            INSERT INTO seasonal_products (farmer_id, season, products)
+            VALUES (${id}, ${product.season}, ${product.products})
+          `;
+        }
+      }
+      
+      // トランザクションのコミット
+      await sql`COMMIT`;
+      
+      return id;
+    } catch (error) {
+      // エラーが発生した場合はロールバック
+      await sql`ROLLBACK`;
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error updating farmer:', error);
+    throw error;
+  }
+}
+
+/**
+ * ユーザーが管理している農家情報を取得する関数
+ */
+export async function getFarmersByUser(userId: string) {
+  try {
+    const { rows } = await sql`
+      SELECT 
+        f.*,
+        b.name as base_name,
+        b.area as base_area,
+        b.station as base_station
+      FROM farmers f
+      JOIN farmer_bases fb ON f.id = fb.farmer_id
+      JOIN bases b ON fb.base_id = b.id
+      JOIN users_farmers uf ON f.id = uf.farmer_id
+      WHERE uf.user_id = ${userId}
+      ORDER BY f.id
+    `;
+    
+    return rows;
+  } catch (error) {
+    console.error('Error fetching farmers by user:', error);
+    throw error;
+  }
+}
+
+/**
+ * 利用可能な拠点の一覧を取得する関数
+ */
+export async function getAllBases() {
+  try {
+    const { rows } = await sql`
+      SELECT id, name, area, station, address 
+      FROM bases
+      ORDER BY name
+    `;
+    return rows;
+  } catch (error) {
+    console.error('Error fetching all bases:', error);
+    throw error;
+  }
+}

@@ -1,6 +1,5 @@
 import { loginUser } from '@/lib/db';
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 
 export async function POST(request: Request) {
   try {
@@ -16,23 +15,30 @@ export async function POST(request: Request) {
     
     const user = await loginUser(email, password);
     
-    // 認証成功時にセッションクッキーを設定
-    const cookieStore = await cookies();
-    cookieStore.set('session', JSON.stringify({
+    // セッションデータの作成
+    const sessionData = {
       userId: user.id,
       name: user.name,
       email: user.email
-    }), {
+    };
+    
+    // レスポンスの作成
+    const response = NextResponse.json({ 
+      message: 'ログインに成功しました', 
+      user 
+    });
+    
+    // クッキーの設定
+    response.cookies.set({
+      name: 'session',
+      value: JSON.stringify(sessionData),
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       maxAge: 60 * 60 * 24 * 7, // 1週間
       path: '/'
     });
     
-    return NextResponse.json({ 
-      message: 'ログインに成功しました', 
-      user 
-    });
+    return response;
   } catch (error: any) {
     return NextResponse.json(
       { error: error.message || 'ログインに失敗しました' },

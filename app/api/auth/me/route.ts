@@ -1,19 +1,18 @@
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { getServerSession } from '@/lib/auth';
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const sessionCookie = cookieStore.get('session');
+    const session = await getServerSession();
     
-    if (!sessionCookie) {
+    if (!session) {
       return NextResponse.json({ user: null });
     }
     
-    const session = JSON.parse(sessionCookie.value);
-    
+    // 既存のAPIと同じレスポンス形式を維持
     return NextResponse.json({ user: session });
   } catch (error) {
+    console.error('Error getting current user:', error);
     return NextResponse.json({ user: null });
   }
 }
